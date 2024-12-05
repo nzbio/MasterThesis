@@ -1,0 +1,9 @@
+setAutoThreshold("Default dark");
+//run("Threshold...");
+setThreshold(3, 3, "raw");
+//setThreshold(3, 3);
+setOption("BlackBackground", false);
+run("Convert to Mask");
+run("Watershed");
+run("Analyze Particles...", "display summarize add");
+close();

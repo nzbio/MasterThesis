@@ -1,0 +1,216 @@
+// Leica LIF Projector macro by Christophe LETERRIER
+// based on the LIF Projector macro
+// version 1.2 11/02/2008
+// compatible with ImageJ 1.39r, LOCI BioFormats 08/02/2008
+//
+// 1.0 :	> initial version
+// 1.1 :	> wrapped in a batch loop to process all lif and lei files in a folder
+//			> silent mode + end status
+// 1.2 (11/02/08) : > correct for new background substraction command
+//					> correct detection of window name after Serie import (Series Name if Count>1 and file name/path inconsistency bug fixed in Bioformats
+// 1.3 (30/06/08)) : added reset scale option
+// 1.3.1 (26/11/09) : changed run BioFormats Importer syntax
+
+macro "LIF Projector" {
+
+// Get the folder name 
+DIR_PATH=getDirectory("Select a directory");
+
+print("\\Clear");
+print("DIR_PATH :"+DIR_PATH);
+
+// Get all file names
+ALL_NAMES=getFileList(DIR_PATH);
+ALL_EXT=newArray(ALL_NAMES.length);
+// Create extensions array
+for (i=0; i<ALL_NAMES.length; i++) {
+	LENGTH=lengthOf(ALL_NAMES[i]);
+	ALL_EXT[i]=substring(ALL_NAMES[i],LENGTH-4,LENGTH);
+}
+
+// Initialize choices variables
+BACK_ARRAY = newArray("None", "25", "50", "100", "200", "500");
+FILT_ARRAY = newArray("None", "Median", "Mean", "Gaussian", "Sigma");
+PROJ_ARRAY = newArray("Max Intensity", "Average Intensity", "Sum Slices");
+SAVE_ARRAY = newArray("No, thanks", "In the source folder", "In a subfolder of the source folder", "In a folder next to the source folder", "In a custom folder");
+
+// Creation of the dialog box
+Dialog.create("Leica Projector");
+Dialog.addMessage("\n");
+Dialog.addChoice("Substract background before projection", BACK_ARRAY, "None");
+Dialog.addChoice("Filter before projection",FILT_ARRAY,"None");
+Dialog.addChoice("Projection Type",PROJ_ARRAY,"None");
+Dialog.addCheckbox("Reset spatial scales for projections ?", false);
+Dialog.addChoice("Save Projections ?", SAVE_ARRAY, "In a subfolder of the source folder");
+Dialog.addCheckbox("Close results images (if saved)", false);
+Dialog.show();
+
+// Feeding variables from dialog choices
+BACK_TYPE=Dialog.getChoice();
+FILT_TYPE=Dialog.getChoice();
+PROJ_TYPE=Dialog.getChoice();
+RESET_SCALE=Dialog.getCheckbox();
+SAVE_TYPE=Dialog.getChoice();
+CLOSE_CHOICE=Dialog.getCheckbox();
+
+setBatchMode(true);
+
+// Loop on all .lei and .lif extensions
+for (n=0; n<ALL_EXT.length; n++) {
+if (ALL_EXT[n]==".lei" || ALL_EXT[n]==".lif") {
+
+	
+	
+	// Get the file path
+	FILE_PATH=DIR_PATH+ALL_NAMES[n];
+	
+	// Store components of the file name
+	FILE_NAME=File.getName(FILE_PATH);
+	FILE_PATH_LENGTH=lengthOf(FILE_PATH);
+	FILE_NAME_LENGTH=lengthOf(FILE_NAME);
+	FILE_DIR=substring(FILE_PATH,0,FILE_PATH_LENGTH-FILE_NAME_LENGTH);
+	FILE_EXT=substring(FILE_NAME,FILE_NAME_LENGTH-4,FILE_NAME_LENGTH);
+	FILE_SHORTNAME=substring(FILE_NAME,0,FILE_NAME_LENGTH-4);
+
+print("");	
+print("FILE_PATH:", FILE_PATH);
+print("FILE_NAME:", FILE_NAME);	
+print("FILE_DIR:", FILE_DIR);
+print("FILE_EXT:", FILE_EXT);
+print("FILE_SHORTNAME:", FILE_SHORTNAME);
+
+	
+	// Localize or create the output folder
+	OUTPUT_DIR="Void";
+	if (SAVE_TYPE=="In the source folder") {
+		OUTPUT_DIR=FILE_DIR;
+	}
+	if (SAVE_TYPE=="In a subfolder of the source folder") {
+		OUTPUT_DIR=FILE_DIR+FILE_SHORTNAME+"_ZProj"+File.separator;
+		File.makeDirectory(OUTPUT_DIR);
+	}
+	if (SAVE_TYPE=="In a folder next to the source folder") {
+		OUTPUT_DIR=File.getParent(FILE_PATH);
+		OUTPUT_DIR=OUTPUT_DIR+"_"+FILE_SHORTNAME+"_ZProj"+File.separator;
+		File.makeDirectory(OUTPUT_DIR);
+	}
+	if (SAVE_TYPE=="In a custom folder") {
+		OUTPUT_DIR=getDirectory("Choose the save folder");
+	}
+	
+print("OUTPUT_DIR: "+OUTPUT_DIR);
+print("");
+	
+	
+	// Start BioFormats and get series number in file.
+	run("Bio-Formats Macro Extensions");
+	Ext.setId(FILE_PATH);
+	Ext.getSeriesCount(SERIES_COUNT);
+	SERIES_NAMES=newArray(SERIES_COUNT);
+
+	
+print("SERIES_COUNT: "+SERIES_COUNT);
+	
+	// Loop on all series in the file
+	for (i=0; i<SERIES_COUNT; i++) {
+		
+		// Get serie name and channels count
+		Ext.setSeries(i);
+		Ext.getEffectiveSizeC(CHANNEL_COUNT);
+		SERIES_NAMES[i]="";
+		Ext.getSeriesName(SERIES_NAMES[i]);
+		TEMP_NAME=toLowerCase(SERIES_NAMES[i]);
+		
+print("SERIES_NAMES["+i+"]: "+ SERIES_NAMES[i] + " (TEMP_NAME: " + TEMP_NAME +")");
+
+		// Import the serie (split channels)
+//		run("Bio-Formats Importer", "open=["+ FILE_PATH + "] " + "view=[Standard ImageJ]" + " stack_order=Default split_channels " + TEMP_NAME);
+//		print("Bio-Formats Importer", "open=["+ FILE_PATH + "] " + "split_channels view=[Standard ImageJ]" + " stack_order=Default " + "series_"+d2s(i+1,0));
+		run("Bio-Formats Importer", "open=["+ FILE_PATH + "] " + "split_channels view=[Standard ImageJ]" + " stack_order=Default " + "series_"+d2s(i+1,0));
+
+		// Loop on each channel (each opened window)
+		for(j=0; j<CHANNEL_COUNT; j++) {
+			
+			// Construct window name
+			TEMP_CHANNEL=d2s(j,0);
+			// Windows has Series Name in title only if more than one Serie
+			if(SERIES_COUNT==1) {
+				SOURCE_WINDOW_NAME=FILE_NAME+ " - C="+TEMP_CHANNEL;
+			}
+			else {
+			SOURCE_WINDOW_NAME=FILE_NAME+" - "+SERIES_NAMES[i]+" - C="+TEMP_CHANNEL;
+			}
+			TYPE="";
+			
+			//Select source image and filter if asked
+			selectWindow(SOURCE_WINDOW_NAME);
+
+// print("SOURCE_WINDOW_NAME: "+SOURCE_WINDOW_NAME);
+			
+			if (BACK_TYPE!="None") {
+				run("Subtract Background...", "rolling="+BACK_TYPE+" sliding disable stack");
+				TYPE=TYPE+" - "+"BG";
+			}
+			
+			if (FILT_TYPE=="Median") {
+				run("Median...", "radius=1 stack");
+			}
+			if (FILT_TYPE=="Mean") {
+				run("Mean...", "radius=1 stack");
+			}
+			if (FILT_TYPE=="Gaussian") {
+				run("Gaussian Blur...", "radius=1 stack");
+			}
+			if (FILT_TYPE=="Sigma") {
+				run("Sigma Filter Plus", "radius=2 use=2 minimum=0.2 outlier stack");
+			}
+			if (FILT_TYPE!="None") {
+				TYPE=TYPE+" - "+substring(FILT_TYPE,0,3)+"Filt";
+			}
+			
+			
+			// Project source stack or duplicate it if no projection
+			if (nSlices!=1 && PROJ_TYPE!="None") {
+				run("Z Project...", "projection=["+PROJ_TYPE+"]");
+				TYPE=TYPE+" - "+substring(PROJ_TYPE,0,3)+"Proj";
+			}
+			else {
+				run("Duplicate...", "title="+SOURCE_WINDOW_NAME+"-1");
+			}
+			
+			// Reset spatial scale of the projection if the option is chosen
+			if (RESET_SCALE==true) {
+				run("Set Scale...", "distance=0 known=1 pixel=1 unit=pixel"); 
+			}
+			
+			// Rename output image and close source image
+			NEW_WINDOW_NAME=FILE_NAME+" - "+SERIES_NAMES[i]+" - C="+TEMP_CHANNEL+TYPE;
+			rename(NEW_WINDOW_NAME);
+			selectWindow(SOURCE_WINDOW_NAME);
+			close();
+			selectWindow(NEW_WINDOW_NAME);
+			
+print("NEW_WINDOW_NAME: "+NEW_WINDOW_NAME);
+			
+			// Create output file path and save the output image
+			OUTPUT_PATH="Void";
+			if (SAVE_TYPE!="No, thanks") {
+				OUTPUT_PATH=OUTPUT_DIR+NEW_WINDOW_NAME+".tif";
+				save(OUTPUT_PATH);
+			}
+			
+// print("OUTPUT_PATH :"+OUTPUT_PATH);
+			
+			// Close output image if asked
+			if (SAVE_TYPE!="No, thanks" && CLOSE_CHOICE==true) {
+				close();
+			}
+		}		
+	}
+
+}	// end of IF loop on lei and lif extensions
+}	// end of FOR loop on n extensions
+
+setBatchMode("exit and display");
+showStatus("finished");
+}	// end of macro
